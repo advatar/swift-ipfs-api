@@ -226,23 +226,34 @@ public class IpfsApi : IpfsApiClient {
     
     /// base commands
 
-    public func put(_ jsonData: Data, completionHandler: @escaping ([MerkleNode]) -> Void) throws {
+    public func putJson(_ json: JsonType, completionHandler: @escaping ([MerkleNode]) -> Void) throws {
         do {
-            /// If there was no data fetched pass an empty dictionary and return.
-            let fixedData = fixStreamJson(jsonData)
-            let json = JsonType.parse(try JSONSerialization.jsonObject(with: fixedData, options: JSONSerialization.ReadingOptions.allowFragments) as AnyObject)
-            let jsonFixed = String(data: fixedData, encoding: .utf8 )
-            print("jsonFixed \(jsonFixed)" )
             let res = try merkleNodesFromJson(json)
             guard res.count > 0 else { throw IpfsApiError.jsonSerializationFailed }
             /// Unwrap optionals
             let result = res.flatMap{ $0 }
             completionHandler( result )
         } catch {
-            print("Error inside add completion handler: \(error)")
+            print("Error inside putJson completion handler: \(error)")
         }
     }
 
+    public func putData(_ jsonData: Data, completionHandler: @escaping ([MerkleNode]) -> Void) throws {
+        do {
+            /// If there was no data fetched pass an empty dictionary and return.
+            let fixedData = fixStreamJson(jsonData)
+            let json = JsonType.parse(try JSONSerialization.jsonObject(with: fixedData, options: JSONSerialization.ReadingOptions.allowFragments) as AnyObject)
+            //let jsonFixed = String(data: fixedData, encoding: .utf8 )
+            //print("jsonFixed \(jsonFixed)" )
+            let res = try merkleNodesFromJson(json)
+            guard res.count > 0 else { throw IpfsApiError.jsonSerializationFailed }
+            /// Unwrap optionals
+            let result = res.flatMap{ $0 }
+            completionHandler( result )
+        } catch {
+            print("Error inside putData completion handler: \(error)")
+        }
+    }
 
     public func add(_ filePath: String, completionHandler: @escaping ([MerkleNode]) -> Void) throws {
         try self.add([filePath], completionHandler: completionHandler)
@@ -255,24 +266,18 @@ public class IpfsApi : IpfsApiClient {
         try net.sendTo(baseUrl+"add?r", content: filePaths) {
             data in
             do {
-                let jsonString = String(data: data, encoding: .utf8 )
-                print("jsonString ", jsonString)
-
+                //let jsonString = String(data: data, encoding: .utf8 )
+                //print("jsonString ", jsonString)
                 /// If there was no data fetched pass an empty dictionary and return.
                 let fixedData = fixStreamJson(data)
-
                 let json = JsonType.parse(try JSONSerialization.jsonObject(with: fixedData, options: JSONSerialization.ReadingOptions.allowFragments) as AnyObject)
-                 let jsonFixed = String(data: fixedData, encoding: .utf8 )
-                print("jsonFixed ", jsonFixed)
-
+                //let jsonFixed = String(data: fixedData, encoding: .utf8 )
+                //print("jsonFixed ", jsonFixed)
                 let res = try merkleNodesFromJson(json)
                 guard res.count > 0 else { throw IpfsApiError.jsonSerializationFailed }
-                
                 /// Unwrap optionals
                 let result = res.flatMap{ $0 }
-                
                 completionHandler( result )
-                
             } catch {
                 print("Error inside add completion handler: \(error)")
             }
