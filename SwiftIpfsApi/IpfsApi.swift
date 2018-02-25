@@ -232,8 +232,9 @@ public class IpfsApi : IpfsApiClient {
     
     public func add(_ filePaths: [String], completionHandler: @escaping ([MerkleNode]) -> Void) throws {
 
-        try net.sendTo(baseUrl+"add?stream-channels=true", content: filePaths) {
-//        try net.sendTo(baseUrl+"add?r", content: filePaths) {
+        print(baseUrl)
+ //       try net.sendTo(baseUrl+"add?stream-channels=true", content: filePaths) {
+        try net.sendTo(baseUrl+"add?r", content: filePaths) {
             data in
             do {
                 let jsonString = String(data: data, encoding: .utf8 )
