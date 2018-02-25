@@ -264,18 +264,18 @@ public class IpfsApi : IpfsApiClient {
     
     public func add(_ filePaths: [String], completionHandler: @escaping ([MerkleNode]) -> Void) throws {
 
-        print(baseUrl)
- //       try net.sendTo(baseUrl+"add?stream-channels=true", content: filePaths) {
-        try net.sendTo(baseUrl+"add?r", content: filePaths) {
+        print("baseUrl", baseUrl)
+        try net.sendTo(baseUrl+"add?stream-channels=true", content: filePaths) {
+ //       try net.sendTo(baseUrl+"add?r", content: filePaths) {
             data in
             do {
-                //let jsonString = String(data: data, encoding: .utf8 )
-                //print("jsonString ", jsonString)
+                let jsonString = String(data: data, encoding: .utf8 )
+                print("jsonString ", jsonString)
                 /// If there was no data fetched pass an empty dictionary and return.
                 let fixedData = fixStreamJson(data)
                 let json = JsonType.parse(try JSONSerialization.jsonObject(with: fixedData, options: JSONSerialization.ReadingOptions.allowFragments) as AnyObject)
-                //let jsonFixed = String(data: fixedData, encoding: .utf8 )
-                //print("jsonFixed ", jsonFixed)
+                let jsonFixed = String(data: fixedData, encoding: .utf8 )
+                print("jsonFixed ", jsonFixed)
                 let res = try merkleNodesFromJson(json)
                 guard res.count > 0 else { throw IpfsApiError.jsonSerializationFailed }
                 /// Unwrap optionals
