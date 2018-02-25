@@ -236,14 +236,16 @@ public class IpfsApi : IpfsApiClient {
 //        try net.sendTo(baseUrl+"add?r", content: filePaths) {
             data in
             do {
-                print(data)
+                let jsonString = String(data: data, encoding: .utf8 )
+                print("jsonString ", jsonString)
+
                 /// If there was no data fetched pass an empty dictionary and return.
                 let fixedData = fixStreamJson(data)
-                
-                print(fixedData)
+
                 let json = JsonType.parse(try JSONSerialization.jsonObject(with: fixedData, options: JSONSerialization.ReadingOptions.allowFragments) as AnyObject)
-                print(json)
-                
+                 let jsonFixed = String(data: fixedData, encoding: .utf8 )
+                print("jsonFixed ", jsonFixed)
+
                 let res = try merkleNodesFromJson(json)
                 guard res.count > 0 else { throw IpfsApiError.jsonSerializationFailed }
                 
