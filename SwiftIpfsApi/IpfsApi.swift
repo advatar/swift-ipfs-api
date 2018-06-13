@@ -80,9 +80,9 @@ extension IpfsApiClient {
                 return
             }
 
-//			print("The data:",NSString(data: data, encoding: String.Encoding.utf8.rawValue))
-//			let fixedData: Data = fixStreamJson(data)
-//			print("The fixed data:",NSString(data: fixedData, encoding: String.Encoding.utf8.rawValue))
+            print("The data:",NSString(data: data, encoding: String.Encoding.utf8.rawValue))
+            let fixedData: Data = fixStreamJson(data)
+            print("The fixed data:",NSString(data: fixedData, encoding: String.Encoding.utf8.rawValue))
 			
 			var json: Any
 			do {
@@ -145,6 +145,21 @@ enum IpfsApiError : Error {
     case bootstrapError(String)
 }
 
+// map command names to string to avoid "stringly typed" lookups.
+enum IpfsCmdString : String {
+    case Ref     = "Ref"
+    case Path    = "Path"
+    case Version = "Version"
+    case Name    = "Name"
+    case Keys    = "Keys"
+    case Peers   = "Peers"
+    case ID      = "ID"
+    case Addrs   = "Addrs"
+    case Value   = "Value"
+    case Message = "Message"
+    
+}
+
 public class IpfsApi : IpfsApiClient {
 
     public var baseUrl: String = ""
@@ -170,12 +185,11 @@ public class IpfsApi : IpfsApiClient {
     public let stats      = Stats()
     public let config     = Config()
     public let update     = Update()
-
     
     public convenience init(addr: Multiaddr) throws {
         /// Get the host and port number from the Multiaddr
         let addressString = try addr.string()
-        var protoComponents = addressString.characters.split{$0 == "/"}.map(String.init)
+        var protoComponents = addressString.split{$0 == "/"}.map(String.init)
         if  protoComponents[0].hasPrefix("ip") == true &&
             protoComponents[2].hasPrefix("tcp") == true {
                 
@@ -259,15 +273,33 @@ public class IpfsApi : IpfsApiClient {
     }
 
     public func add(_ filePath: String, completionHandler: @escaping ([MerkleNode]) -> Void) throws {
-        try self.add([filePath], completionHandler: completionHandler)
+        
+        try net.sendTo(baseUrl+"add?s", filePath: filePath) {
+            data in
+            do {
+                /// If there was no data fetched pass an empty dictionary and return.
+                let fixedData = fixStreamJson(data)
+                
+                let json = JsonType.parse(try JSONSerialization.jsonObject(with: fixedData, options: JSONSerialization.ReadingOptions.allowFragments) as AnyObject)
+                
+                let res = try merkleNodesFromJson(json)
+                guard res.count > 0 else { throw IpfsApiError.jsonSerializationFailed }
+                
+                /// Unwrap optionals
+                let result = res.compactMap{ $0 }
+                
+                completionHandler( result )
+                
+            } catch {
+                print("Error inside add completion handler: \(error)")
+            }
+        }
     }
     
-    public func add(_ filePaths: [String], completionHandler: @escaping ([MerkleNode]) -> Void) throws {
 
-    
-        print("baseUrl", baseUrl)
-        try net.sendTo(baseUrl+"add?stream-channels=true", content: filePaths) {
- //       try net.sendTo(baseUrl+"add?r", content: filePaths) {
+    public func add(_ fileData: Data, completionHandler: @escaping ([MerkleNode]) -> Void) throws {
+        
+        try net.sendTo(baseUrl+"add?stream-channels=true", content: fileData) {
             data in
             do {
                 let jsonString = String(data: data, encoding: .utf8 )
@@ -280,7 +312,7 @@ public class IpfsApi : IpfsApiClient {
                 let res = try merkleNodesFromJson(json)
                 guard res.count > 0 else { throw IpfsApiError.jsonSerializationFailed }
                 /// Unwrap optionals
-                let result = res.flatMap{ $0 }
+                let result = res.compactMap{ $0 }
                 completionHandler( result )
             } catch {
                 print("Error inside add completion handler: \(error)")
@@ -324,7 +356,7 @@ public class IpfsApi : IpfsApiClient {
             var refs: [Multihash] = []
 			
             for obj in results {
-                if let ref = obj.object?["Ref"]?.string {
+                if let ref = obj.object?[IpfsCmdString.Ref.rawValue]?.string {
                     let mh = try fromB58String(ref)
                     refs.append(mh)
                 }
@@ -333,7 +365,7 @@ public class IpfsApi : IpfsApiClient {
             completionHandler(refs)
         }
     }
-	
+
     public func resolve(_ scheme: String, hash: Multihash, recursive: Bool, completionHandler: @escaping (JsonType) -> Void) throws {
         try fetchJson("resolve?arg=/\(scheme)/\(b58String(hash))&r=\(recursive)", completionHandler: completionHandler)
     }
@@ -342,7 +374,7 @@ public class IpfsApi : IpfsApiClient {
         try fetchJson("dns?arg=" + domain) {
             result in
             
-                guard let path = result.object?["Path"]?.string else { throw IpfsApiError.resultMissingData("No Path found") }
+                guard let path = result.object?[IpfsCmdString.Path.rawValue]?.string else { throw IpfsApiError.resultMissingData("No Path found") }
                 completionHandler(path)
         }
     }
@@ -380,7 +412,7 @@ public class IpfsApi : IpfsApiClient {
     public func version(_ completionHandler: @escaping (String) -> Void) throws {
         try fetchJson("version") {
             json in
-            let version = json.object?["Version"]?.string ?? ""
+            let version = json.object?[IpfsCmdString.Version.rawValue]?.string ?? ""
             completionHandler(version)
         }
     }

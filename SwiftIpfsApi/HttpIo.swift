@@ -18,9 +18,8 @@ enum HttpIoError : Error {
 public struct HttpIo : NetworkIo {
 
     public func receiveFrom(_ source: String, completionHandler: @escaping (Data) throws -> Void) throws {
-        
         guard let url = URL(string: source) else { throw HttpIoError.urlError("Invalid URL") }
-        
+        print("HttpIo receiveFrom url is \(url)")
         let task = URLSession.shared.dataTask(with: url) {
             (data: Data?, response: URLResponse?, error: Error?) in
             
@@ -48,7 +47,6 @@ public struct HttpIo : NetworkIo {
         guard let url = URL(string: source) else { throw HttpIoError.urlError("Invalid URL") }
         let config = URLSessionConfiguration.default
         let handler = StreamHandler(updateHandler: updateHandler, completionHandler: completionHandler)
-//        let handler = FetchHandler(updateHandler: updateHandler, completionHandler: completionHandler)
         let session = URLSession(configuration: config, delegate: handler, delegateQueue: nil)
         let task = session.dataTask(with: url)
         
@@ -63,16 +61,17 @@ public struct HttpIo : NetworkIo {
     }
 
 
-    public func sendTo(_ target: String, content: [String], completionHandler: @escaping (Data) -> Void) throws {
-
+    public func sendTo(_ target: String, filePath: String, completionHandler: @escaping (Data) -> Void) throws {
+        
         var multipart = try Multipart(targetUrl: target, encoding: .utf8)
         
-        multipart = try handle(oldMultipart: multipart, files: content)
+        multipart = try handle(oldMultipart: multipart, files: [filePath])
         
         Multipart.finishMultipart(multipart, completionHandler: completionHandler)
+        
     }
     
-    func handle(oldMultipart: Multipart, files: [String]) throws -> Multipart{
+    func handle(oldMultipart: Multipart, files: [String], prePath: String? = nil) throws -> Multipart{
         
         var multipart = oldMultipart
         let filemgr = FileManager.default
@@ -80,37 +79,33 @@ public struct HttpIo : NetworkIo {
 
         for file in files {
             
-            let path = file.hasPrefix("file://") ? file.substring(from: file.index(file.startIndex, offsetBy:7)) : file
-            
+            let path = NSString(string: file).replacingOccurrences(of: "file://", with: "")
+            let prePath = prePath ?? (path as NSString).deletingLastPathComponent + "/"
             guard filemgr.fileExists(atPath: path, isDirectory: &isDir) else { throw HttpIoError.urlError("file not found at given path: \(path)") }
-
             
             if isDir.boolValue == true {
                 
-                /// Expand directory and call recursively with the contents.
+                let trimmedPath = path.replacingOccurrences(of: prePath, with: "")
                 
-                multipart = try Multipart.addDirectoryPart(oldMultipart: multipart, path: path)
+                /// Expand directory and call recursively with the contents.
+                multipart = try Multipart.addDirectoryPart(oldMultipart: multipart, path: trimmedPath)
                 
                 let dirFiles = try filemgr.contentsOfDirectory(atPath: path)
                 
                 let newPaths = dirFiles.map { aFile in (path as NSString).appendingPathComponent(aFile)}
                 
                 if dirFiles.count > 0 {
-                    multipart = try handle(oldMultipart: multipart, files: newPaths)
+                    multipart = try handle(oldMultipart: multipart, files: newPaths, prePath: prePath)
                 }
                 
             } else {
                 
                 /// Add the contents of the file to multipart message.
-                
                 let fileUrl = URL(fileURLWithPath: path)
-                
                 guard let fileData = try? Data(contentsOf: fileUrl) else { throw MultipartError.failedURLCreation }
+                let trimmedFilePath = path.replacingOccurrences(of: prePath, with: "")
                 
-                var fileName = fileUrl.absoluteString //.lastPathComponent
-                fileName = fileName.substring(from: file.index(file.startIndex, offsetBy:7))
-                
-                multipart = try Multipart.addFilePart(multipart, fileName: fileName, fileData: fileData)
+                multipart = try Multipart.addFilePart(multipart, fileName: trimmedFilePath, fileData: fileData)
             }
         }
         
@@ -118,7 +113,7 @@ public struct HttpIo : NetworkIo {
     }
     
     func fetchUpdateHandler(_ data: Data, task: URLSessionDataTask) {
-        print("fetch update")
+        
         /// At this point we could decide to stop the task.
         if task.countOfBytesReceived > 1024 {
             print("fetch task cancel")
@@ -127,25 +122,12 @@ public struct HttpIo : NetworkIo {
     }
     
     func fetchCompletionHandler(_ result: AnyObject) {
-        print("fetch completion:")
+        
         for res in result as! [[String : AnyObject]] {
             print(res)
         }
     }
 }
-
-//public func getMIMETypeFromURL(location: NSURL) -> String? {
-//    /// is this a file?
-//    if  location.fileURL,
-//        let fileExtension: CFStringRef = location.pathExtension,
-//        let exportedUTI = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, fileExtension, nil)?.takeRetainedValue(),
-//        let mimeType = UTTypeCopyPreferredTagWithClass(exportedUTI, kUTTagClassMIMEType) {
-//        
-//        
-//        return mimeType.takeUnretainedValue() as String
-//    }
-//    return nil
-//}
 
 public class StreamHandler : NSObject, URLSessionDataDelegate {
     
@@ -159,11 +141,12 @@ public class StreamHandler : NSObject, URLSessionDataDelegate {
     }
     
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        print("HANDLER:")
+        
         dataStore.append(data)
         
         do {
             // fire the update handler
+            // FIX: Use the return value of the update handler to signal that we want to end the stream.
             try _ = updateHandler(data, dataTask)
         } catch {
             print("In StreamHandler: updateHandler error: \(error)")
@@ -171,7 +154,7 @@ public class StreamHandler : NSObject, URLSessionDataDelegate {
     }
     
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        print("Completed")
+        
         session.invalidateAndCancel()
         do {
             try completionHandler(dataStore)

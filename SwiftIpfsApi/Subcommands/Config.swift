@@ -20,7 +20,7 @@ public class Config : ClientSubCommand {
     }
     
     public func replace(_ filePath: String, completionHandler: (Bool) -> Void) throws {
-        try parent!.net.sendTo(parent!.baseUrl+"config/replace?stream-channels=true", content: [filePath]) {
+        try parent!.net.sendTo(parent!.baseUrl+"config/replace?stream-channels=true", filePath: filePath) {
             _ in
         }
     }
@@ -28,8 +28,8 @@ public class Config : ClientSubCommand {
     public func get(_ key: String, completionHandler: @escaping (JsonType) throws -> Void) throws {
         try parent!.fetchJson("config?arg=" + key) {
             result in
-            guard let value = result.object?["Value"] else {
-                throw IpfsApiError.swarmError("Config get error: \(result.object?["Message"]?.string)")
+            guard let value = result.object?[IpfsCmdString.Value.rawValue] else {
+                throw IpfsApiError.swarmError("Config get error: \(String(describing: result.object?[IpfsCmdString.Message.rawValue]?.string))")
             }
             
             try completionHandler(value)

@@ -14,16 +14,21 @@ import SwiftMultihash
 
 class SwiftIpfsApiTests: XCTestCase {
 
-    var hostString      = "127.0.0.1" //"192.168.5.8"
+//    var hostString      = "ipfs-thing.localhost"//192.168.5.9" //127.0.0.1" //"192.168.5.8"
+    var hostString      = "127.0.0.1"
     let hostPort        = 5001
     
     /// Your own IPNS node hash
     let nodeIdString    = "QmWNwhBWa9sWPvbuS5XNaLp6Phh5vRN77BZRF5xPWG3FN1"
+//    let nodeIdString    = "QmRzsihDMWML1dNPa51qwD2dacvZPfTrqsQt4pi1DWGJFP"
     
-    /// Another know neighbouring hash
+    /// Another known neighbouring hash
+//    let altNodeIdString = "QmWqjusr86LThkYgjAbNMa8gJ55wzVufkcv5E2TFfzYZXu"
     let altNodeIdString = "QmSoLnSGccFuZQJzRadHn95W2CrSFmZuTdDWP8HXaHca9z"
 
-    let peerIPAddr = "/ip4/104.236.176.52/tcp/4001"
+    let peerIPAddr = "/ip4/10.12.0.8/tcp/4001"
+    
+    let currentIpfsVersion = "0.4.14"
     
     override func setUp() {
         super.setUp()
@@ -39,30 +44,42 @@ class SwiftIpfsApiTests: XCTestCase {
         // This is an example of a functional test case.
         // Use XCTAssert and related functions to verify your tests produce the correct results.
         let soRandom = Multipart.createBoundary()
-        print(soRandom.characters.count)
+        print(soRandom.count)
     }
     
+    // FIX: Fails due to issue in Multihash not recognizing new non Qm style hashes.
     func testRefsLocal() {
         
-        let refsLocal = { (dispatchGroup: DispatchGroup) throws -> Void in
+        let expectation = XCTestExpectation(description: "testRefsLocal")
+        
+        do {
+
+        
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
 
-            try api.refs.local() {
-                (localRefs: [Multihash]) in
+            try api.refs.local() { (localRefs: [Multihash]) in
                 
                 for mh in localRefs {
                     print(b58String(mh))
                 }
-                dispatchGroup.leave()
+                
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("test failed with error \(error)")
         }
         
-        tester(refsLocal)
+        wait(for: [expectation], timeout: 50.0)
     }
     
+    // FIX: Fails due to issue in Multihash not recognizing new non Qm style hashes.
     func testPin() {
         
-        let pinAdd = { (dispatchGroup: DispatchGroup) throws -> Void in
+        let pinAddExpectation = XCTestExpectation(description: "testPinAdd")
+        let pinLsExpectation = XCTestExpectation(description: "testPinLs")
+        let pinRmExpectation = XCTestExpectation(description: "testPinRm")
+        
+        do {
             
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             let multihash = try fromB58String("Qmb4b83vuYMmMYqj5XaucmEuNAcwNBATvPL6CNuQosjr91")
@@ -74,194 +91,163 @@ class SwiftIpfsApiTests: XCTestCase {
                     print(b58String(mh))
                 }
                 
-                dispatchGroup.leave()
-            }
-        }
-        
-        tester(pinAdd)
-        
-        
-        let pinLs = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            
-            try api.pin.ls() {
-                (pinned: [Multihash : JsonType]) in
+                pinAddExpectation.fulfill()
                 
-                for (k,v) in pinned {
-                    print("\(b58String(k)) \((v.object?["Type"]?.string)!)")
+                // Pin Ls. Visual inspection for now. Change to check for added pin.
+                try? api.pin.ls() { (pinned: [Multihash : JsonType]) in
+    
+                    for (k,v) in pinned {
+                        print("\(b58String(k)) \((v.object?["Type"]?.string)!)")
+                    }
+                    pinLsExpectation.fulfill()
+
+                    // Pin Rm. Remove previously pinned hash.
+                    try? api.pin.rm(multihash) { (removed: [Multihash]) in
+        
+                        for hash in removed {
+                            print("Removed hash:",b58String(hash))
+                        }
+                       
+                        pinRmExpectation.fulfill()
+                    }
                 }
-                dispatchGroup.leave()
             }
+        } catch {
+            XCTFail("test failed with error \(error)")
         }
         
-        tester(pinLs)
-        
-        let pinRm = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let multihash = try fromB58String("Qmb4b83vuYMmMYqj5XaucmEuNAcwNBATvPL6CNuQosjr91")
-            
-            try api.pin.rm(multihash) {
-                (removed: [Multihash]) in
-                
-                for hash in removed {
-                    print("Removed hash:",b58String(hash))
-                }
-                dispatchGroup.leave()
-            }
-        }
-        
-        tester(pinRm)
+        wait(for: [pinAddExpectation, pinLsExpectation, pinRmExpectation], timeout: 50.0)
     }
     
     func testRepo() {
-        let repoGc = { (dispatchGroup: DispatchGroup) throws -> Void in
+
+        let lsExpectation = XCTestExpectation(description: "ls")
+        let repoGcExpectation = XCTestExpectation(description: "testRepoGc")
+        
+        do {
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             
             /** First we do an ls of something we know isn't pinned locally.
                 This causes it to be copied to the local node so that the gc has
                 something to collect. */
-            let tmpGroup = DispatchGroup()
-            
-            tmpGroup.enter()
 
             let multihash = try fromB58String("QmTtqKeVpgQ73KbeoaaomvLoYMP7XKemhTgPNjasWjfh9b")
-            try api.ls(multihash){ _ in tmpGroup.leave() }
-            tmpGroup.wait(timeout: DispatchTime.distantFuture)
-            
-            
-            try api.repo.gc() {
-                result in
-                if let removed = result.array {
-                    for ref in removed {
-                        print("removed: ",(ref.object?["Key"]?.string)!)
+        
+            try api.ls(multihash) { _ in
+                
+                lsExpectation.fulfill()
+                
+                try? api.repo.gc() { result in
+                    
+                    if let removed = result.array {
+                        for ref in removed {
+                            print("removed: ",(ref.object?["Key"]?.string)!)
+                        }
                     }
+                    repoGcExpectation.fulfill()
                 }
-                dispatchGroup.leave()
             }
+        } catch {
+            XCTFail()
         }
         
-        tester(repoGc)
+        wait(for: [lsExpectation, repoGcExpectation], timeout: 300.0)
     }
     
     func testBlock() {
         
-        let blockPut = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
+        let blockPutExpectation = XCTestExpectation(description: "testBlockPut")
+        let blockGetExpectation = XCTestExpectation(description: "testBlockGet")
+        let blockStatExpectation = XCTestExpectation(description: "testBlockStat")
+        
+        do {
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             let rawData: [UInt8] = Array("hej verden".utf8)
             
-            try api.block.put(rawData) {
-                (result: MerkleNode) in
+            try api.block.put(rawData) { (result: MerkleNode) in
                 
                 XCTAssert(b58String(result.hash!) == "QmR4MtZCAUkxzg8ewgNp6hDVgtqnyojDSWVF4AFG9RWsYw")
-                print("ipfs.block.put test:")
-//                for mt in result {
-                    print("Name:", result.name)
-                    print("Hash:", b58String(result.hash!))
-//                }
-                dispatchGroup.leave()
+//                print("ipfs.block.put test:")
+//                print("Name: ", result.name ?? "No name!")
+//                print("Hash: ", b58String(result.hash!))
+
+                blockPutExpectation.fulfill()
             }
-        }
-        
-        tester(blockPut)
-        
-        
-        let blockGet = { (dispatchGroup: DispatchGroup) throws -> Void in
             
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let multihash = try fromB58String("QmR4MtZCAUkxzg8ewgNp6hDVgtqnyojDSWVF4AFG9RWsYw")
+            // Block Get.
+            var multihash = try fromB58String("QmR4MtZCAUkxzg8ewgNp6hDVgtqnyojDSWVF4AFG9RWsYw")
             
-            try api.block.get(multihash) {
-                (result: [UInt8]) in
-                    let res = String(bytes: result, encoding: String.Encoding.utf8)
-                    XCTAssert(res == "hej verden")
-                    dispatchGroup.leave()
+            try api.block.get(multihash) { (result: [UInt8]) in
+                let res = String(bytes: result, encoding: String.Encoding.utf8)
+                XCTAssert(res == "hej verden")
+                
+                blockGetExpectation.fulfill()
             }
-        }
-        
-        tester(blockGet)
-        
-        
-        let blockStat = { (dispatchGroup: DispatchGroup) throws -> Void in
+
+            // Block Stat.
+            multihash = try fromB58String("QmR4MtZCAUkxzg8ewgNp6hDVgtqnyojDSWVF4AFG9RWsYw")
             
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let multihash = try fromB58String("QmR4MtZCAUkxzg8ewgNp6hDVgtqnyojDSWVF4AFG9RWsYw")
-            
-            try api.block.stat(multihash) {
-                result in
+            try api.block.stat(multihash) { result in
                 
                 let hash = result.object?["Key"]?.string
                 let size = result.object?["Size"]?.number
-
+                
                 if hash == nil || size == nil
                     || hash != "QmR4MtZCAUkxzg8ewgNp6hDVgtqnyojDSWVF4AFG9RWsYw"
                     || size != 10 {
                     XCTFail()
                 }
-                dispatchGroup.leave()
+                blockStatExpectation.fulfill()
             }
+
+        } catch {
+            XCTFail("test failed with error \(error)")
         }
         
-        tester(blockStat)
+        wait(for: [blockPutExpectation, blockGetExpectation, blockStatExpectation], timeout: 50.0)
     }
     
     func testObject() {
         
-        let objectNew = { (dispatchGroup: DispatchGroup) throws -> Void in
+        let objNewExpectation = XCTestExpectation(description: "testObjectNew")
+        let objPutExpectation = XCTestExpectation(description: "testObjectPut")
+        let objGetExpectation = XCTestExpectation(description: "testObjectGet")
+        let objLinksExpectation = XCTestExpectation(description: "testObjectLinks")
+        
+        do {
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             try api.object.new() {
                 (result: MerkleNode) in
                 
                 /// A new ipfs object always has the same hash so we can assert against it.
                 XCTAssert(b58String(result.hash!) == "QmdfTbBqBPQ7VNxZEYEj14VmRuZBkqFbiwReogJgS1zR1n")
-                dispatchGroup.leave()
+                objNewExpectation.fulfill()
             }
-        }
-        
-        tester(objectNew)
-        
-        let objectPut = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let data = [UInt8]("{ \"Data\" : \"Dauz\" }".utf8)
-            
-            try api.object.put(data) {
-                (result: MerkleNode) in
-                
-                XCTAssert(b58String(result.hash!) == "QmUqvXbE4s9oTQNhBXm2hFapLq1pnuuxsMdxP9haTzivN6")
-                dispatchGroup.leave()
-            }
-        }
-        
-        tester(objectPut)
-        
-        let objectGet = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let multihash = try fromB58String("QmUqvXbE4s9oTQNhBXm2hFapLq1pnuuxsMdxP9haTzivN6")
-            
-            try api.object.get(multihash) {
-                (result: MerkleNode) in
-                
-                XCTAssert(result.data! == Array("Dauz".utf8))
-                dispatchGroup.leave()
 
+            
+            // Test Object Put
+            let data = [UInt8]("{ \"Data\" : \"Dauz\" }".utf8)
+
+            try api.object.put(data) { (result: MerkleNode) in
+
+                XCTAssert(b58String(result.hash!) == "QmUqvXbE4s9oTQNhBXm2hFapLq1pnuuxsMdxP9haTzivN6")
+                objPutExpectation.fulfill()
             }
-        }
-        
-        tester(objectGet)
-        
-        
-        let objectLinks = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let multihash = try fromB58String("QmR3azp3CCGEFGZxcbZW7sbqRFuotSptcpMuN6nwThJ8x2")
-            
-            try api.object.links(multihash) {
-                (result: MerkleNode) in
-                
+
+            // Test Object Get
+            var multihash = try fromB58String("QmUqvXbE4s9oTQNhBXm2hFapLq1pnuuxsMdxP9haTzivN6")
+
+            try api.object.get(multihash) { (result: MerkleNode) in
+
+                XCTAssert(result.data! == Array("Dauz".utf8))
+                objGetExpectation.fulfill()
+            }
+
+            // Test Object Links
+            multihash = try fromB58String("QmR3azp3CCGEFGZxcbZW7sbqRFuotSptcpMuN6nwThJ8x2")
+
+            try api.object.links(multihash) { (result: MerkleNode) in
+
                 print(b58String(result.hash!))
                 /// There should be two links off the root:
                 if let links = result.links, links.count == 2 {
@@ -272,18 +258,24 @@ class SwiftIpfsApiTests: XCTestCase {
                 } else {
                     XCTFail()
                 }
-                dispatchGroup.leave()
-                
+                objLinksExpectation.fulfill()
+
             }
+
+        } catch {
+            XCTFail("test failed with error \(error)")
         }
         
-        tester(objectLinks)
-        
+        wait(for: [objNewExpectation, objPutExpectation, objGetExpectation, objLinksExpectation], timeout: 50.0)
     }
 
     func testObjectPatch() {
         
-        let setData = { (dispatchGroup: DispatchGroup) throws -> Void in
+        let objNewExpectation = XCTestExpectation(description: "testObjectNew")
+        let objPatchExpectation = XCTestExpectation(description: "testObjectPatch")
+        let objLinksExpectation = XCTestExpectation(description: "testObjectLinks")
+        do {
+        
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             
             /// Get the empty directory object to start off with.
@@ -295,341 +287,322 @@ class SwiftIpfsApiTests: XCTestCase {
                     result in
                     
                     print(b58String(result.hash!))
-                    dispatchGroup.leave()
-                }
-            }
-        }
-        
-        tester(setData)
-
-        let appendData = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            
-            /// The previous hash that was returned from setData
-            let previousMultihash = try fromB58String("QmQXys2Xv5xiNBR21F1NNwqWC5cgHDnndKX4c3yXwP4ywj")
-            /// Get the empty directory object to start off with.
-            
-            let data = "Addition to the message."
-            try api.object.patch(previousMultihash, cmd: .AppendData, args: data) {
-                result in
-                
-                print(b58String(result.hash!))
-                
-                /// Now we request the data from the new Multihash to compare it.
-                try api.object.data(result.hash!) {
-                    result in
                     
-                    let resultString = String(bytes: result, encoding: String.Encoding.utf8)
-                    XCTAssert(resultString == "This is a longer message.Addition to the message.")
-                    dispatchGroup.leave()
-                }
-            }
-        }
-        
-        tester(appendData)
-
-        
-        let objectPatch = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-
-            let hash = "QmUYttJXpMQYvQk5DcX2owRUuYJBJM6W7KQSUsycCCE2MZ" /// a file
-            let hash2 = "QmVtU7ths96fMgZ8YSZAbKghyieq7AjxNdcqyVzxTt3qVe" /// a directory
-            
-            /// Get the empty directory object to start off with.
-            try api.object.new(.UnixFsDir) {
-                (result: MerkleNode) in
-
-                /** This uses the directory object to create a new object patched
-                    with the object of the given hash. */
-                try api.object.patch(result.hash!, cmd: IpfsObject.ObjectPatchCommand.AddLink, args: "foo", hash) {
-                    (result: MerkleNode) in
+                    objNewExpectation.fulfill()
                     
-                    /// Get a new object from the previous object patched with the object of hash2
-                    try api.object.patch(result.hash!, cmd: IpfsObject.ObjectPatchCommand.AddLink, args: "ars", hash2) {
-                        (result: MerkleNode) in
+                    /// The previous hash that was returned from setData
+                    let previousMultihash = try fromB58String("QmQXys2Xv5xiNBR21F1NNwqWC5cgHDnndKX4c3yXwP4ywj")
+                    /// Get the empty directory object to start off with.
+                    
+                    let data = " Addition to the message."
+                    try api.object.patch(previousMultihash, cmd: .AppendData, args: data) {
+                        result in
                         
-                        /// get the new object's links to check against.
-                        try api.object.links(result.hash!) {
-                            (result: MerkleNode) in
+                        print(b58String(result.hash!))
+                        
+                        /// Now we request the data from the new Multihash to compare it.
+                        try api.object.data(result.hash!) {
+                            result in
                             
-                            /// Check that the object's link is the same as 
-                            /// what we originally passed to the patch command.
-                            if let links = result.links, links.count == 2,
-                                let linkHash = links[1].hash, b58String(linkHash) == hash {}
-                            else { XCTFail() }
+                            let resultString = String(bytes: result, encoding: String.Encoding.utf8)
+                            XCTAssert(resultString == "This is a longer message. Addition to the message.")
                             
-                            /// Now try to remove it and check that we only have one link.
-                            try api.object.patch(result.hash!, cmd: .RmLink, args: "foo") {
+                            objPatchExpectation.fulfill()
+                            
+                            let hash = "QmUYttJXpMQYvQk5DcX2owRUuYJBJM6W7KQSUsycCCE2MZ" /// a file
+                            let hash2 = "QmVtU7ths96fMgZ8YSZAbKghyieq7AjxNdcqyVzxTt3qVe" /// a directory
+                            
+                            /// Get the empty directory object to start off with.
+                            try? api.object.new(.UnixFsDir) {
                                 (result: MerkleNode) in
                                 
-                                /// get the new object's links to check against.
-                                try api.object.links(result.hash!) {
+                                /** This uses the directory object to create a new object patched
+                                 with the object of the given hash. */
+                                try? api.object.patch(result.hash!, cmd: IpfsObject.ObjectPatchCommand.AddLink, args: "foo", hash) {
                                     (result: MerkleNode) in
-
-                                    if let links = result.links, links.count == 1,
-                                        let linkHash = links[0].hash, b58String(linkHash) == hash2 {}
-                                    else { XCTFail() }
-
-                                    dispatchGroup.leave()
+                                    
+                                    /// Get a new object from the previous object patched with the object of hash2
+                                    try? api.object.patch(result.hash!, cmd: IpfsObject.ObjectPatchCommand.AddLink, args: "ars", hash2) {
+                                        (result: MerkleNode) in
+                                        
+                                        /// get the new object's links to check against.
+                                        try? api.object.links(result.hash!) {
+                                            (result: MerkleNode) in
+                                            
+                                            /// Check that the object's link is the same as
+                                            /// what we originally passed to the patch command.
+                                            if let links = result.links, links.count == 2,
+                                                let linkHash = links[1].hash, b58String(linkHash) == hash {}
+                                            else { XCTFail() }
+                                            
+                                            /// Now try to remove it and check that we only have one link.
+                                            try? api.object.patch(result.hash!, cmd: .RmLink, args: "foo") {
+                                                (result: MerkleNode) in
+                                                
+                                                /// get the new object's links to check against.
+                                                try? api.object.links(result.hash!) {
+                                                    (result: MerkleNode) in
+                                                    
+                                                    if let links = result.links, links.count == 1,
+                                                        let linkHash = links[0].hash, b58String(linkHash) == hash2 {}
+                                                    else { XCTFail() }
+                                                    
+                                                    objLinksExpectation.fulfill()
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
+
                         }
                     }
+
                 }
             }
+        } catch {
+            XCTFail("test failed with error \(error)")
         }
         
-        tester(objectPatch)
+        wait(for: [objNewExpectation, objPatchExpectation, objLinksExpectation], timeout: 50.0)
     }
     
     
-    func testName() {
-    
-        var idHash: String = ""
-        /// Start test by storing the existing hash so we can restore it after testing.
-        let nameResolvePublish = { (dispatchGroup: DispatchGroup) throws -> Void in
+    func testNameResolve() {
+        
+        let nameResolveExpectation = XCTestExpectation(description: "testNameResolve")
+        let namePublishExpectation = XCTestExpectation(description: "testNamePublish")
+        let nameResolve2Expectation = XCTestExpectation(description: "testNameResolve2")
+        
+        do {
+
+            var idHash: String = ""
+            /// Start test by storing the existing hash so we can restore it after testing.
+
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            try api.name.resolve(){
-                result in
+            try api.name.resolve() { result in
                 
-//                idHash = result.stringByReplacingOccurrencesOfString("/ipfs/", withString: "")
                 idHash = result.replacingOccurrences(of: "/ipfs/", with: "")
-                dispatchGroup.leave()
-            }
-        }
-        
-        tester(nameResolvePublish)
-        
-        let publishedPath = "/ipfs/" + idHash
-        
-        let publish = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let multihash = try fromB58String(idHash)
-            try api.name.publish(hash: multihash) {
-                result in
                 
-                XCTAssert(  (result.object?["Name"]?.string)! == self.nodeIdString &&
+                nameResolveExpectation.fulfill()
+                
+                let publishedPath = "/ipfs/" + idHash
+                do {
+                    //let multihash = try fromB58String(idHash)
+                    
+//                    try api.name.publish(hash: multihash) { result in
+                    try api.name.publish(ipfsPath: publishedPath) { result in
+                        
+                        XCTAssert(  (result.object?["Name"]?.string)! == self.nodeIdString &&
                             (result.object?["Value"]?.string)! == publishedPath)
-                dispatchGroup.leave()
+                        
+                        namePublishExpectation.fulfill()
+                        
+                        try? api.name.resolve(){ result in
+                            XCTAssert(result == publishedPath)
+                            nameResolve2Expectation.fulfill()
+                        }
+                    }
+                } catch {
+                    XCTFail()
+                }
+
             }
+        } catch {
+            XCTFail("test failed with error \(error)")
         }
         
-        self.tester(publish)
-        
-        let resolve = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            try api.name.resolve(){
-                result in
-                XCTAssert(result == publishedPath)
-                dispatchGroup.leave()
-            }
-        }
-        
-        self.tester(resolve)
+        wait(for: [nameResolveExpectation, namePublishExpectation, nameResolve2Expectation], timeout: 250.0)
     }
     
-    func testDht() {
-        
+    
+    // Fails on timeout because the api doesn't return – it keeps looking.
+    func testDhtFindProvs() {
+
+        let expectation = XCTestExpectation(description: "testFindProvs")
         do {
             /// Common
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let neighbour = self.altNodeIdString
+
             let multihash = try fromB58String("QmUFtMrBHqdjTtbebsL6YGebvjShh3Jud1insUv12fEVdA")
             
-            let findProvs = { (dispatchGroup: DispatchGroup) throws -> Void in
-                try api.dht.findProvs(multihash) {
-                    result in
-                    
-                    var pass = false
-                    repeat {
-                        guard case .Array(let providers) = result else { break }
-                        
-                        for prov in providers {
-                            
-                            guard   case .Object(let obj) = prov,
-                                    case .Array(let responses) = obj["Responses"]! else { continue }
-                            
-                            for response in responses {
-                                
-                                guard   case .Object(let ars) = response,
-                                        case .String(let provHash) = ars["ID"]! else { continue }
-                                
-                                /// This node should definitely be in the dht.
-                                if provHash == self.nodeIdString { pass = true }
-                            }
-                        }
-                    } while false
-                    
-                    XCTAssert(pass)
-                    
-                    dispatchGroup.leave()
-                }
-            }
-            
-/// redo this test to account for the fact that it must be explicitly stopped
-//tester(findProvs)
-            
-            
-            let query = { (dispatchGroup: DispatchGroup) throws -> Void in
-                /// This nearest works for me but may need changing to something local to the tester.
-                let nearest = try fromB58String(neighbour)
-                try api.dht.query(nearest) {
-                    result in
-                    /// assert against some known return value
-                    print(result)
-                    dispatchGroup.leave()
-                }
-            }
-            
-//            tester(query)
-            
-            
-            let findPeer = { (dispatchGroup: DispatchGroup) throws -> Void in
-                /// This peer works for me but may need changing to something local to the tester.
-                let peer = try fromB58String(neighbour)
+            try api.dht.findProvs(multihash, numProviders: 1) {
+                result in
                 
-                /// At the moment the findpeer wraps the stream json in an array
-                try api.dht.findpeer(peer) {
-                    result in
-                    
-                    var pass = false
-                    
-                    if let resArray = result.object?["Responses"]?.array {
-                        for res in resArray {
-                            if res.object?["ID"]?.string == neighbour {
-                                pass = true
-                            }
+                // For each (if any) element in the result array we filter out
+                // any objects with an ID that matches the localhost node's id hash.
+                let matchingProviders = result.array?.compactMap { $0.object?["Responses"]?.array?.filter { $0.object?["ID"]?.string == self.nodeIdString }}
+                
+                let count = matchingProviders?.count ?? 0
+                XCTAssert(count > 0)
+                
+                expectation.fulfill()
+            }
+        } catch {
+            XCTFail("test failed with error \(error)")
+        }
+        
+        wait(for: [expectation], timeout: 15.0)
+    }
+    
+    // This test fails on timeout because the api doesn't actually end and thus doesn't return. Fix somehow.
+    func testDhtQuery() {
+        
+        let expectation = XCTestExpectation(description: "testDhtQuery")
+        do {
+            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
+            let neighbour = self.altNodeIdString
+            /// This nearest works for me but may need changing to something local to the tester.
+            let nearest = try fromB58String(neighbour)
+            try api.dht.query(nearest) {
+                result in
+                /// assert against some known return value
+                print(result)
+                expectation.fulfill()
+            }
+        } catch {
+            XCTFail("test failed with error \(error)")
+        }
+        
+        wait(for: [expectation], timeout: 120.0)
+    }
+    
+    func testDhtFindPeer() {
+        
+        let expectation = XCTestExpectation(description: "testDhtFindPeer")
+        do {
+            
+            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
+            let neighbour = self.altNodeIdString
+            /// This peer works for me but may need changing to something local to the tester.
+            let peer = try fromB58String(neighbour)
+            
+            /// At the moment the findpeer wraps the stream json in an array
+            try api.dht.findpeer(peer) {
+                result in
+                
+                var pass = false
+                
+                if let resArray = result.object?["Responses"]?.array {
+                    for res in resArray {
+                        if res.object?["ID"]?.string == neighbour {
+                            pass = true
                         }
                     }
-                    XCTAssert(pass)
-                    
-                    dispatchGroup.leave()
                 }
+                XCTAssert(pass)
+                
+                expectation.fulfill()
             }
             
-            tester(findPeer)
-            
-//            let put = { (dispatchGroup: dispatch_group_t) throws -> Void in
-//            }
-//            tester(put)
-//            let get = { (dispatchGroup: dispatch_group_t) throws -> Void in
-//            }
-//            tester(get)
-            
         } catch {
-            print("testDht error \(error)")
+            XCTFail("test failed with error \(error)")
         }
+        
+        wait(for: [expectation], timeout: 5.0)
     }
     
     /// If this fails check from the command line that the ipns path actually resolves
     /// to the checkHash before thinking this is actually broken. Ipns links do change.
     func testFileLs() {
                 
-        let lsIpns = { (dispatchGroup: DispatchGroup) throws -> Void in
+        let ipnsExpectation = XCTestExpectation(description: "testIpnsLs")
+        let ipfsExpectation = XCTestExpectation(description: "testIpfsLs")
+        
+        do {
+
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             /// basedir hash
-            let path = "/ipns/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ"
+            var path = "/ipns/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ"
             
             /// lvl2file hash
-            let checkHash = "QmSiTko9JZyabH56y2fussEt1A5oDqsFXB3CkvAqraFryz"
+            let checkIpnsHash = "QmV1imZz8VRiYFw7ZSSUtTFtcaYA5iJXURkxLhEJssBXvy"
 
             try api.file.ls(path) { result in
-                XCTAssert(result.object?["Objects"]?.object?[checkHash]?.object?["Hash"]?.string == checkHash)
-                dispatchGroup.leave()
+                
+                if let foundHash = result.object?["Objects"]?.object?[checkIpnsHash]?.object?["Hash"]?.string {
+                    
+                    XCTAssert(foundHash == checkIpnsHash)
+                } else { XCTFail() }
+                
+                ipnsExpectation.fulfill()
             }
-        }
             
-        tester(lsIpns)
-        
-        let lsIpfs = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            let checkHash = "QmQHAVCpAQxU21bK8VxeWisn19RRC4bLNFV4DiyXDDyLXM"
             let objHash = "QmQuQzFkULYToUBrMtyHg2tjvcd93N4kNHPCxfcFthB2kU"
-            let path = "/ipfs/" + objHash
+            let checkIpfsHash = "QmQHAVCpAQxU21bK8VxeWisn19RRC4bLNFV4DiyXDDyLXM"
+            path = "/ipfs/" + objHash
             
-            try api.file.ls(path) {
-                result in
-                XCTAssert(result.object?["Objects"]?.object?[objHash]?.object?["Links"]?.array?[0].object?["Hash"]?.string == checkHash)
-                dispatchGroup.leave()
+            try api.file.ls(path) { result in
+                
+                XCTAssert(result.object?["Objects"]?.object?[objHash]?.object?["Links"]?.array?[0].object?["Hash"]?.string == checkIpfsHash)
+                
+                ipfsExpectation.fulfill()
             }
+        } catch {
+            XCTFail("testFileLs failed with error \(error)")
         }
-            
-        tester(lsIpfs)
         
+        wait(for: [ipnsExpectation, ipfsExpectation], timeout: 35.0)
     }
     
     func testBootstrap() {
         
+        let trustedPeer = "/ip4/104.131.131.82/tcp/4001/ipfs/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ"
+        let trustedPeer2 = "/ip4/104.236.176.52/tcp/4001/ipfs/QmSoLnSGccFuZQJzRadHn95W2CrSFmZuTdDWP8HXaHca9z"
+    
+        let bootstrapRmExpectation = XCTestExpectation(description: "testBootstrapRm")
+        let bootstrapListExpectation = XCTestExpectation(description: "testBootstrapList")
+        let bootstrapAddExpectation = XCTestExpectation(description: "testBootstrapAdd")
+        
         do {
-            
-            let trustedPeer = "/ip4/104.131.131.82/tcp/4001/ipfs/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ"
-            let trustedPeer2 = "/ip4/104.236.176.52/tcp/4001/ipfs/QmSoLnSGccFuZQJzRadHn95W2CrSFmZuTdDWP8HXaHca9z"
-
             let tpMultiaddr = try newMultiaddr(trustedPeer)
             let tpMultiaddr2 = try newMultiaddr(trustedPeer2)
             
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-        
-            let rm = { (dispatchGroup: DispatchGroup) throws -> Void in
+
+            let tPeers = [tpMultiaddr, tpMultiaddr2]
+            
+            try api.bootstrap.list() { (peers: [Multiaddr]) in
                 
-                let tPeers = [tpMultiaddr, tpMultiaddr2]
+                for peer in peers {
+                    print(try peer.string())
+                }
+                bootstrapListExpectation.fulfill()
+            }
+            
+            try api.bootstrap.add(tPeers) { (peers: [Multiaddr]) in
                 
-                try api.bootstrap.rm(tPeers) {
-                    (peers: [Multiaddr]) in
+                for peer in peers {
+                    print(try peer.string())
+                }
+                
+                if peers.count == 2 {
+                    let t1 = try peers[0].string() == trustedPeer
+                    let t2 = try peers[1].string() == trustedPeer2
+                    XCTAssert(t1 && t2)
+                } else { XCTFail() }
+                
+                bootstrapAddExpectation.fulfill()
+                
+                try api.bootstrap.rm(tPeers) { (peers: [Multiaddr]) in
                     
                     for peer in peers {
                         print(try peer.string())
                     }
-
+                    
                     let a = try peers[0].string() == trustedPeer
                     let b = try peers[1].string() == trustedPeer2
                     XCTAssert(peers.count == 2 && a && b)
                     
-                    dispatchGroup.leave()
+                    bootstrapRmExpectation.fulfill()
                 }
             }
-            
-            tester(rm)
-            
-            let bootstrap = { (dispatchGroup: DispatchGroup) throws -> Void in
-                
-                try api.bootstrap.list() {
-                    (peers: [Multiaddr]) in
-                    for peer in peers {
-                       print(try peer.string())
-                    }
-                    dispatchGroup.leave()
-                }
-            }
-            
-            tester(bootstrap)
-            
-            let add = { (dispatchGroup: DispatchGroup) throws -> Void in
-                
-                let tPeers = [tpMultiaddr, tpMultiaddr2]
-                
-                try api.bootstrap.add(tPeers) {
-                    (peers: [Multiaddr]) in
-                    
-                    for peer in peers {
-                        print(try peer.string())
-                    }
 
-                    if peers.count == 2 {
-                        let t1 = try peers[0].string() == trustedPeer
-                        let t2 = try peers[1].string() == trustedPeer2
-                        XCTAssert(t1 && t2)
-                    } else { XCTFail() }
-                    
-                    dispatchGroup.leave()
-                }
-            }
-            
-            tester(add)
-        
         } catch {
-            print("Bootstrap test error: \(error)")
+            XCTFail("testLog failed with error \(error)")
         }
+        
+        wait(for: [bootstrapRmExpectation, bootstrapListExpectation, bootstrapAddExpectation], timeout: 5.0)
     }
     
     func testSwarmPeers() {
@@ -637,194 +610,207 @@ class SwiftIpfsApiTests: XCTestCase {
         /// NB: This test will require the user to change the knownPeer to a known peer.
         let knownPeer = peerIPAddr+"/ipfs/"+self.altNodeIdString
         
-        let swarmPeers = { (dispatchGroup: DispatchGroup) throws -> Void in
+        let expectation = XCTestExpectation(description: "testSwarmPeers")
+        do {
+
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            try api.swarm.peers(){
-                (peers: [Multiaddr]) in
+            try api.swarm.peers(){ (peers: [Multiaddr]) in
                 
                 var pass = false
                 for peer in peers {
                     pass = (try peer.string() == knownPeer)
                     if pass { break }
                 }
+                
                 XCTAssert(pass)
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testSwarmPeers failed with error \(error)")
         }
         
-        tester(swarmPeers)
+        wait(for: [expectation], timeout: 5.0)
     }
     
     func testSwarmAddrs() {
-        let swarmAddrs = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            try api.swarm.addrs(){
-                addrs in
+        
+        let expectation = XCTestExpectation(description: "testSwarmAddrs")
+        do {
 
-                XCTAssert(addrs.object?[self.altNodeIdString]?.array?[0].string == self.peerIPAddr)
+            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
+            try api.swarm.addrs(){ addrs in
+
+                if let addr = addrs.object?[self.altNodeIdString]?.array?[0].string {
+                    XCTAssert(addr == self.peerIPAddr)
+                } else { XCTFail() }
                 
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testSwarmAddrs failed with error \(error)")
         }
         
-        tester(swarmAddrs)
+        wait(for: [expectation], timeout: 5.0)
     }
 
     func testSwarmConnect() {
         
-        let swarmDisConnect = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
+        let expectation = XCTestExpectation(description: "testSwarmConnect")
+        do {
+
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             
             /// NB: This test will require the user to change the peerAddress to a known peer.
             let peerAddress = self.peerIPAddr+"/ipfs/"+self.altNodeIdString
             let expectedMessage = "connect \(self.altNodeIdString) success"
             
-            try api.swarm.connect(peerAddress){
-                result in
+            try api.swarm.connect(peerAddress){ result in
                 
-                XCTAssert(result.object?["Strings"]?.array?[0].string! == expectedMessage)
+                if let msg = result.object?["Strings"]?.array?[0].string {
+                    XCTAssert(msg == expectedMessage)
+                } else { XCTFail() }
                 
-                try api.swarm.disconnect(peerAddress) {
-                    result in
+                // Not currently working as expected due to circuit relay implementation.
+                // see https://discuss.ipfs.io/t/ipfs-swarm-disconnect-failure-conn-not-found/2553/6
+                try api.swarm.disconnect(peerAddress) { result in
                     
-                    XCTAssert(result.object?["Strings"]?.array?[0].string! == "dis" + expectedMessage)
-                    dispatchGroup.leave()
+                    if let msg = result.object?["Strings"]?.array?[0].string {
+                        XCTAssert(msg == "dis" + expectedMessage)
+                    } else { XCTFail() }
+                    
+                    expectation.fulfill()
                 }
             }
+        } catch {
+            XCTFail("testSwarmConnect failed with error \(error)")
         }
         
-        tester(swarmDisConnect)
+        wait(for: [expectation], timeout: 5.0)
     }
     
     
     func testDiag() {
         
-        let net = { (dispatchGroup: DispatchGroup) throws -> Void in
+        let expectation = XCTestExpectation(description: "testDiagSys")
+        do {
+
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            try api.diag.net() {
-                result in
-                print(result)
-                /// do comparison with truth here.
-                dispatchGroup.leave()
-            }
-        }
-        
-        tester(net)
-        
-        let sys = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
+            
             try api.diag.sys() {
                 result in
-                print(result)
+                print("diag sys result: \(result)")
                 /// do comparison with truth here.
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
+
+        } catch {
+            XCTFail("testDiag failed with error \(error)")
         }
-        tester(sys)
+        
+        wait(for: [expectation], timeout: 5.0)
     }
     
     func testConfig() {
-        let show = { (dispatchGroup: DispatchGroup) throws -> Void in
+        
+        do {
+            let configShowExpectation = XCTestExpectation(description: "testConfigShow")
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
+            
             try api.config.show() {
                 result in
                 print(result)
                 /// do comparison with truth here. Currently by visual inspection :/
-                dispatchGroup.leave()
+                configShowExpectation.fulfill()
             }
-        }
-        
-        tester(show)
-        
-        let set = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
+
+            let configSetExpectation = XCTestExpectation(description: "testConfigSet")
+            let configSetGetExpectation = XCTestExpectation(description: "setGetExpectation")
+            
+            // Set a value in the config and read back the same to confirm.
             try api.config.set("Teo", value: "42") {
                 result in
                 
+                configSetExpectation.fulfill()
+                
                 try api.config.get("Teo") {
                     result in
-                    /// do comparison with truth here.
-                    if case .String(let strResult) = result, strResult == "42" { } else {
-                        XCTFail()
-                    }
-                    dispatchGroup.leave()
+                    
+                    if let strValue = result.string {
+                        XCTAssertTrue(strValue == "42")
+                    } else {  XCTFail() }
+                    
+                    configSetGetExpectation.fulfill()
                 }
+                
             }
-        }
-    
-        tester(set)
-        
-   
-        let get = { (dispatchGroup: DispatchGroup) throws -> Void in
-            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            try api.config.get("Datastore.Type") {
-                result in
-                /// do comparison with truth here.
-                if case .String(let strResult) = result, strResult == "leveldb" { } else {
-                    XCTFail()
-                }
-                dispatchGroup.leave()
-            }
-        }
-        
-        tester(get)
+            
+            wait(for: [configShowExpectation, configSetExpectation, configSetGetExpectation], timeout: 25.0)
 
+        } catch {
+            XCTFail("testConfig failed with error \(error)")
+        }
     }
     
     
-    func testBaseCommands() {
+    func testLs() {
         
-        /// For this test assert that the resulting links' name is Mel.html and MelKaye.png
-        let lsTest = { (dispatchGroup: DispatchGroup) throws -> Void in
-
+        let expectation = XCTestExpectation(description: "testLs")
+        do {
             let multihash = try fromB58String("QmPXME1oRtoT627YKaDPDQ3PwA8tdP9rWuAAweLzqSwAWT")
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             try api.ls(multihash) {
                 results in
                 
-                var pass = false
+                
                 let node = results[0]
-                if let links = node.links ,
-                        links.count == 5 &&
+                if let links = node.links {
+                    let pass = (links.count == 5 &&
                         links[0].name! == "contact" &&
                         links[1].name! == "help" &&
                         links[2].name! == "quick-start" &&
                         links[3].name! == "readme" &&
-                        links[4].name! == "security-notes" {
-                    pass = true
+                        links[4].name! == "security-notes")
+                    
+                    XCTAssertTrue(pass)
+                } else {
+                    XCTFail("testLs no links found.")
                 }
                 
-                XCTAssert(pass)
-                
-                /// do comparison with truth here.
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
-
+        } catch {
+            XCTFail("testLs failed with error \(error)")
         }
-            
-        tester(lsTest)
-            
-            
-        let catTest = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
+        
+        wait(for: [expectation], timeout: 5.0)
+    }
+        
+    func testCat() {
+
+        let expectation = XCTestExpectation(description: "testCat")
+        do {
+
             let multihash = try fromB58String("QmYeQA5P2YuCKxZfSbjhiEGD3NAnwtdwLL6evFoVgX1ULQ")
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             
             try api.cat(multihash) {
                 result in
                 print("cat:",String(bytes: result, encoding: String.Encoding.utf8)!)
-                dispatchGroup.leave()
+                
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testCat failed with error \(error)")
         }
         
-        tester(catTest)
-        
+        wait(for: [expectation], timeout: 5.0)
     }
 
     func testPing() {
         
-        let ping = { (dispatchGroup: DispatchGroup) throws -> Void in
+        let expectation = XCTestExpectation(description: "testPing")
+        do {
+
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             try api.ping(self.altNodeIdString) {
                result in
@@ -837,86 +823,99 @@ class SwiftIpfsApiTests: XCTestCase {
                     }
                 }
 
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testPing failed with error \(error)")
         }
         
-        tester(ping)
+        wait(for: [expectation], timeout: 15.0)
     }
     
     func testIds() {
+        
+        let idt1Expectation = XCTestExpectation(description: "testIds 1")
+        let idt2Expectation = XCTestExpectation(description: "testIds 2")
         
         do {
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             let idString = self.nodeIdString
             
-            let id = { (dispatchGroup: DispatchGroup) throws -> Void in
-                try api.id(idString) {
-                    result in
-                    
-                    XCTAssert(result.object?["ID"]?.string == idString)
-                    dispatchGroup.leave()
-                }
+            try api.id(idString) { result in
+                
+                XCTAssert(result.object?[IpfsCmdString.ID.rawValue]?.string == idString)
+                
+                idt1Expectation.fulfill()
             }
+        
             
-            tester(id)
-            
-            let idDefault = { (dispatchGroup: DispatchGroup) throws -> Void in
-                try api.id() {
-                    result in
-                    
-                    XCTAssert(result.object?["ID"]?.string == idString)
-                    dispatchGroup.leave()
-                }
+            try api.id() {
+                result in
+                
+                XCTAssert(result.object?["ID"]?.string == idString)
+                idt2Expectation.fulfill()
             }
-            
-            tester(idDefault)
             
         } catch {
-            print("testIds error:\(error)")
+            XCTFail("testIds failed with error \(error)")
         }
+        
+        wait(for: [idt1Expectation, idt2Expectation], timeout: 15.0)
     }
     
     
     func testVersion() {
-        let version = { (dispatchGroup: DispatchGroup) throws -> Void in
+        
+        let expectation = XCTestExpectation(description: "testVersion")
+        do {
+
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            try api.version() {
-                version in
-                print(version)
-                dispatchGroup.leave()
+            try api.version() { version in
+                
+                XCTAssert(version == self.currentIpfsVersion)
+                
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testVersion failed with error \(error)")
         }
         
-        tester(version)
-        
+        wait(for: [expectation], timeout: 5.0)
     }
     
     func testCommands() {
-        let commands = { (dispatchGroup: DispatchGroup) throws -> Void in
+        
+        let expectation = XCTestExpectation(description: "testCommands")
+        do {
+
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             try api.commands(true) {
                 result in
                
+                // Short of having a gigantic (and regularly changing) table to
+                // check against I don't know how to verify this. For now a
+                // visual inspection will have to do.
                 if let commands = result.object {
                     for (k,v) in commands {
                         print("k: ",k)
                         print("v: ",v)
                     }
                 }
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testCommands failed with error \(error)")
         }
         
-        tester(commands)
-        
+        wait(for: [expectation], timeout: 5.0)
     }
     
     func testStats() {
-        let stats = { (dispatchGroup: DispatchGroup) throws -> Void in
+
+        let expectation = XCTestExpectation(description: "testStats")
+        do {
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
-            try api.stats.bw() {
-                result in
+            try api.stats.bw() { result in
                
                 /// We can't check for the values as they change constantly but at 
                 /// least we can check for the keys being there.
@@ -925,16 +924,19 @@ class SwiftIpfsApiTests: XCTestCase {
                     result.object?["RateIn"] != nil &&
                     result.object?["RateOut"] != nil )
                 
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testStats failed with error \(error)")
         }
-        
-        tester(stats)
-        
+    
+        wait(for: [expectation], timeout: 5.0)
     }
     
     func testLog() {
-        let log = { (dispatchGroup: DispatchGroup) throws -> Void in
+        
+        let expectation = XCTestExpectation(description: "testLog")
+        do {
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             let updateHandler = { (data: Data) -> Bool in
                 print("Got an update. Closing.")
@@ -947,34 +949,44 @@ class SwiftIpfsApiTests: XCTestCase {
                 for entry in log {
                     print(entry)
                 }
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testLog failed with error \(error)")
         }
         
-        //tester(log)
-        
+        wait(for: [expectation], timeout: 5.0)
     }
     
     func testdns() {
-        let dns = { (dispatchGroup: DispatchGroup) throws -> Void in
+        
+        let expectation = XCTestExpectation(description: "testdns")
+        
+        do {
             let api       = try IpfsApi(addr: "/ip4/\(self.hostString)/tcp/\(self.hostPort)")
             let domain    = "ipfs.io"
-            try api.dns(domain) {
-                domainString in
+            // Change domainHash to match whatever the actual hash of ipfs.io currently resolves to.
+            let domainHash = "QmYNQJoKGNHTpPxCBPh9KkDpaExgd2duMa3aF6ytMpHdao"
+            
+            try api.dns(domain) { domainString in
                 
                 print("Domain: ",domainString)
-//                if domainString != "/ipfs/QmcQBvKTP8R7p8DgLEtKuoeuz1BBbotGpmofEFBEYBfc97" {
-//                    XCTFail("domain string mismatch.")
-//                }
-                dispatchGroup.leave()
+                XCTAssert(domainString == "/ipfs/\(domainHash)")
+
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail("testdns failed with error \(error)")
         }
-        
-        tester(dns)
+    
+        wait(for: [expectation], timeout: 120.0)
     }
     
     func testMount() {
-        let mount = { (dispatchGroup: DispatchGroup) throws -> Void in
+        
+        let expectation = XCTestExpectation(description: "testMount")
+
+        do {
             let api       = try IpfsApi(addr: "/ip4/\(self.hostString)/tcp/\(self.hostPort)")
             
             try api.mount() {
@@ -983,92 +995,153 @@ class SwiftIpfsApiTests: XCTestCase {
                 print("Mount got", result)
                 XCTAssert(  result.object?["IPFS"]?.string == "/ipfs" &&
                             result.object?["IPNS"]?.string == "/ipns")
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
             
+        } catch {
+            XCTFail("testMount failed with error \(error)")
         }
         
-        tester(mount)
+        wait(for: [expectation], timeout: 120.0)
     }
     
     func testResolveIpfs() {
-        let resolve = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
+        
+        let expectation = XCTestExpectation(description: "testResolveIpfs")
+        do {
             let api       = try IpfsApi(addr: "/ip4/\(self.hostString)/tcp/\(self.hostPort)")
-            let multihash = try fromB58String("QmXsnbVWHNnLk3QGfzGCMy1J9GReWN7crPvY1DKmFdyypK")
+            let multihash = try fromB58String("QmeZy1fGbwgVSrqbfh9fKQrAWgeyRnj7h8fsHS1oy3k99x")
             
-            try api.resolve("ipfs", hash: multihash, recursive: false) {
-                result in
+            try api.resolve("ipfs", hash: multihash, recursive: false) { result in
+                
 				XCTAssert(result.object?["Path"]?.string == "/ipfs/QmW2WQi7j6c7UgJTarActp7tDNikE4B2qXtFCfLPdsgaTQ")
-//                print("Resolve IPFS got", result)
-                dispatchGroup.leave()
+                
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail()
         }
         
-        tester(resolve)
+        wait(for: [expectation], timeout: 120.0)
     }
     
     func testResolveIpns() {
-        let resolve = { (dispatchGroup: DispatchGroup) throws -> Void in
-            
+        
+        let expectation = XCTestExpectation(description: "testResolveIpns")
+        do {
             let api       = try IpfsApi(addr: "/ip4/\(self.hostString)/tcp/\(self.hostPort)")
-//            let api = try IpfsApi(addr: "/ip4/127.0.0.1/tcp/5001")
             let multihash = try fromB58String(self.nodeIdString)
-            
             
             try api.resolve("ipns", hash: multihash, recursive: false) {
                 result in
                 
-                XCTAssert(result.object?["Path"]?.string == "/ipfs/QmeXS82nS8YDXQpiqFeT4gCHc1HGoxZe5zH6Srj4HhkiFy")
+                // Replace the resolved string for your own.
+                let resolvedIpnsString = "/ipfs/QmeVYFFc4gDmBkNB44RykvunsUFK777iYN1SH1J1VFYn15"
                 
-                dispatchGroup.leave()
+                XCTAssert(result.object?["Path"]?.string == resolvedIpnsString)
+                
+                expectation.fulfill()
             }
+        } catch {
+            XCTFail()
+            print("Error in testResolveIpns \(error)")
         }
-        
-        tester(resolve)
+        wait(for: [expectation], timeout: 120.0)
     }
     
 
     
     
     func testAdd() {
-        
-        let add = { (dispatchGroup: DispatchGroup) throws -> Void in
+
 //            let filePaths = [   "file:///Users/teo/tmp/outstream.txt",
 //                                "file:///Users/teo/tmp/notred.png",
-//                                "file:///Users/teo/tmp/F4115_WU5086.jpeg"]
+//                                "file:///Users/teo/tmp/game.jpg"]
 //            let filePaths = [   "file:///Users/teo/Library/Services/FilesToIpfs.workflow"]
-            let filePaths = [   "file:///Users/teo/tmp/addtest3"]
+            let pathsToHashes = [   "file:///Users/teo/tmp/addtest/adir" : "QmY9Ks5KhpTZ6udF7F7Buq7gQ71aAKvynBXjHFhbpLLRrS",
+                                "file:///Users/teo/tmp/addtest5" : "Qma97dios2R9rndBXyzfVmYEaCF8hkcyA6ULnw4WLu8Yk6"]
+//            let filePaths = [   "file:///Users/teo/tmp/addtest5"]
 
+        var testExpectations = [XCTestExpectation]()
+        
+        do {
+            
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
             
-            
-            try api.add(filePaths) {
-                result in
+            for pathToHash in pathsToHashes {
+        
+                let expectation = XCTestExpectation(description: pathToHash.key)
+                testExpectations.append(expectation)
                 
-                /// Subtract one because last element is an empty directory to ignore
-                let resultCount = result.count
-                
-                //XCTAssert(resultCount == filePaths.count)
-                
-                //for mt in result {
-                for i in 0..<resultCount {
-					//XCTAssert(result[i].name! == filePaths[i].components(separatedBy: "/").last)
-					//print("Name:", filePaths[i].components(separatedBy: "/").last)
-                    print("Hash:", b58String(result[i].hash!))
+                try api.add(pathToHash.key) {
+                    result in
+                    
+                    /// Subtract one because last element is an empty directory to ignore
+                    let resultCount = result.count
+                    
+                    for i in 0..<resultCount {
+                        
+                        print("Name: \(String(describing: result[i].name)) Hash:", b58String(result[i].hash!))
+                        
+                        if let hash = result[i].hash, b58String(hash) == pathToHash.value {
+                            expectation.fulfill()
+                            return
+                        }
+                    }
+                    
+                    // Did not find a match after going through all hashes in the result.
+                    expectation.fulfill()
+                    XCTFail()
                 }
-                
-                dispatchGroup.leave()
             }
+        } catch {
+            print("Error in testAdd: \(error)")
         }
         
-        tester(add)
+        wait(for: testExpectations, timeout: 60.0)
+    }
+    
+    func testAddData() {
+        
+        let content = "Awesome file content"
+        let contentHash = "QmQKqsRQYuiEzAwxfZxppGBsN8knJAGvVSV3GhnrTrLpzm"
+        let fileData = content.data(using: .utf8)
+        let expectation = XCTestExpectation(description: "testAddData")
+        
+        do {
+            let api = try IpfsApi(host: self.hostString, port: self.hostPort)
+            
+            try api.add(fileData!) { result in
+                
+                guard result.count == 1, let hash = result[0].hash else {
+                    XCTFail()
+                    expectation.fulfill()
+                    return
+                }
+                
+                XCTAssert(b58String(hash) == contentHash)
+                
+                try? api.cat(hash) { result in
+                    
+                    let ipfsContent = String(bytes: result, encoding: String.Encoding.utf8)!
+                    
+                    XCTAssert(ipfsContent == content)
+                    
+                    expectation.fulfill()
+                }
+            }
+            
+            wait(for: [expectation], timeout: 5.0)
+        } catch {
+            print("Error in testAddData \(error)")
+        }
     }
     
     func testRefs() {
-        let refs = { (dispatchGroup: DispatchGroup) throws -> Void in
+        do {
             let multihash = try fromB58String("QmXsnbVWHNnLk3QGfzGCMy1J9GReWN7crPvY1DKmFdyypK")
             let api = try IpfsApi(host: self.hostString, port: self.hostPort)
+            let expectation = XCTestExpectation(description: "testRefs")
             
             try api.refs(multihash, recursive: false) {
                 result in
@@ -1076,14 +1149,14 @@ class SwiftIpfsApiTests: XCTestCase {
                 XCTAssert(  result.count == 2 &&
                             b58String(result[0]) == "QmZX6Wrte3EqkUCwLHqBbuDhmH5yqPurNNTxKQc4NFfDxT" &&
                             b58String(result[1]) == "QmaLB324wDRKEJbGGr8FWg3qWnpTxdc2oEKDT62qhe8tMR" )
-//                for mh in result {
-//                    print(b58String(mh))
-//                }
                 
-                dispatchGroup.leave()
+                expectation.fulfill()
             }
+            
+            wait(for: [expectation], timeout: 5.0)
+        } catch {
+            print("Error testRefs \(error)")
         }
-        tester(refs)
     }
     
     
@@ -1104,7 +1177,7 @@ class SwiftIpfsApiTests: XCTestCase {
             XCTFail("tester error: \(error)")
         }
         
-        group.wait(timeout: DispatchTime.distantFuture)
+        _ = group.wait(timeout: DispatchTime.distantFuture)
     }
     
     func testPerformanceExample() {
